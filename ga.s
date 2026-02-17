@@ -1,12 +1,4 @@
-PORTB = $6000
-PORTA = $6001
-DDRB = $6002
-DDRA = $6003
-T1CL = $6004              ; VIA Timer 1 counter low byte
-
-E = %10000000
-RW = %01000000
-RS = %00100000
+  .include "constants.inc"
 
 ; Zero page variables
 rng_lo = $00
@@ -36,6 +28,13 @@ fit_res_hi = $17           ; calc_fitness result, high
 dec_lo = $18               ; temp for decimal print (16-bit value)
 dec_hi = $19
 
+; Morse input zero-page vars
+morse_idx = $1a            ; current position in binary tree (1-31)
+target_pos = $1b           ; cursor position in text buffer (0-15)
+press_lo = $1c             ; press duration counter low
+press_hi = $1d             ; press duration counter high
+morse_len = $1e            ; number of dots/dashes for current char
+
 ; Population: 16 individuals x 16 bytes = 256 bytes at $0200
 ; New generation buffer at $0300-$03FF
 POP_BASE = $0200
@@ -43,6 +42,11 @@ NEW_BASE = $0300
 POP_SIZE = 16
 IND_LEN = 16
 TARGET_LEN = 9
+
+; Morse input RAM buffers
+TARGET_BUF = $0400         ; 16-byte target phrase buffer
+TEXT_BUF = $0400           ; alias: morse.inc writes to TEXT_BUF
+MORSE_BUF = $0410          ; morse dot/dash display (up to 5 chars)
 
   .org $8000
 
@@ -72,15 +76,111 @@ reset:
   ora #$01           ; ensure non-zero (zero state would get stuck)
   sta rng_hi
 
-  ; Initialize generation counter to 0
+  ; Load default target into RAM and enter input mode
+  jsr load_default_target
+  jmp input_mode
+
+; ---------------------------------------------------------------------------
+; load_default_target: copy default_target string into TARGET_BUF
+; ---------------------------------------------------------------------------
+
+load_default_target:
+  ldx #0
+load_default_loop:
+  lda default_target,x
+  sta TARGET_BUF,x
+  inx
+  cpx #IND_LEN
+  bne load_default_loop
+  rts
+
+; ---------------------------------------------------------------------------
+; input_mode: let user enter a custom target via morse, or use default
+; ---------------------------------------------------------------------------
+
+input_mode:
+  jsr init_input
+  jsr input_display
+  lda #0
+  sta press_lo             ; reuse as timeout counter low
+  sta press_hi             ; reuse as timeout counter high
+
+input_loop:
+  ; If morse in progress, check auto-confirm timeout
+  lda morse_len
+  beq input_poll           ; no morse elements yet, just poll buttons
+
+  inc press_lo
+  bne input_poll
+  inc press_hi
+
+  lda press_hi
+  cmp #CONFIRM_THRESH
+  bcc input_poll
+
+  ; Timeout expired: auto-confirm
+  jsr confirm_char
+  jsr input_display
+  lda #0
+  sta press_lo
+  sta press_hi
+  jmp input_loop
+
+input_poll:
+  lda PORTA
+  and #$0f               ; mask PA0-PA3
+
+  ; Check PA0 (morse input)
+  tax
+  and #BTN_MORSE
+  beq input_not_morse
+  jsr debounce
+  jsr read_morse_press
+  jsr input_display
+  ; Reset timeout after each element
+  lda #0
+  sta press_lo
+  sta press_hi
+  jmp input_loop
+
+input_not_morse:
+  ; Check PA1 (backspace)
+  txa
+  and #BTN_CHAR
+  beq input_not_char
+  jsr debounce
+  jsr backspace
+  jsr input_display
+  jsr wait_release
+  jmp input_loop
+
+input_not_char:
+  ; Check PA2 (confirm target -> start GA)
+  txa
+  and #BTN_GO
+  beq input_not_go
+  jsr debounce
+  jmp ga_start
+
+input_not_go:
+  ; Check PA3 (cancel -> use default target + start GA)
+  txa
+  and #BTN_CANCEL
+  beq input_loop         ; no button pressed
+  jsr debounce
+  jsr load_default_target
+  jmp ga_start
+
+; ---------------------------------------------------------------------------
+; ga_start: reset generation counter, init population, begin GA
+; ---------------------------------------------------------------------------
+
+ga_start:
   lda #0
   sta gen_lo
   sta gen_hi
 
-  ; Initialize population with random printable chars
   jsr init_population
-
-  ; Find and display the best individual
   jsr find_best
   jsr display
 
@@ -94,6 +194,15 @@ ga_loop:
   ora best_fit_hi
   beq ga_done          ; both zero = perfect match
 
+  ; Check PA3 (cancel -> re-enter input mode)
+  lda PORTA
+  and #BTN_CANCEL
+  beq ga_continue
+  jsr debounce
+  jsr wait_release
+  jmp input_mode
+
+ga_continue:
   jsr evolve
   jsr copy_new_to_pop
 
@@ -109,7 +218,13 @@ no_gen_carry:
   jmp ga_loop
 
 ga_done:
-  jmp ga_done
+  ; Poll PA3 to re-enter input mode
+  lda PORTA
+  and #BTN_CANCEL
+  beq ga_done
+  jsr debounce
+  jsr wait_release
+  jmp input_mode
 
 ; ---------------------------------------------------------------------------
 ; init_population: fill 16 individuals x 16 bytes with random printable chars
@@ -186,8 +301,8 @@ calc_fit_loop:
   ; Compute abs(individual[y] - target[y])
   lda (ptr_lo),y
   sec
-  sbc target,y       ; A = char - target (may underflow)
-  bpl calc_fit_pos   ; positive or zero: already abs value
+  sbc TARGET_BUF,y     ; compare against RAM target buffer
+  bpl calc_fit_pos     ; positive or zero: already abs value
   ; Negative: negate (two's complement)
   eor #$ff
   clc
@@ -429,7 +544,7 @@ display:
   ldy #0
 display_best:
   lda (ptr_lo),y
-  cmp target,y
+  cmp TARGET_BUF,y     ; compare against RAM target buffer
   bne display_no_match
   inc scratch
 display_no_match:
@@ -537,13 +652,13 @@ dec_table_hi: .byte >10000, >1000, >100, >10, >1
 ; Data
 ; ---------------------------------------------------------------------------
 
-target: .byte "It's work"
+default_target: .byte "It's work"
   .byte "       "
 
 msg_fit: .asciiz "Fit:"
 msg_gen: .asciiz " Gen:"
 
-; Percentage lookup: index 0-16 → round(i * 100 / 16)
+; Percentage lookup: index 0-16 -> round(i * 100 / 16)
 pct_table: .byte 0, 6, 12, 19, 25, 31, 38, 44, 50, 56, 62, 69, 75, 81, 88, 94, 100
 
 ; ---------------------------------------------------------------------------
@@ -583,57 +698,6 @@ rand_mod_done:
   rts
 
 ; ---------------------------------------------------------------------------
-; LCD routines
-; ---------------------------------------------------------------------------
-
-lcd_set_line2:
-  lda #$c0
-  jsr lcd_instruction
-  rts
-
-lcd_wait:
-  pha
-  lda #%00000000
-  sta DDRB
-lcd_busy:
-  lda #RW
-  sta PORTA
-  lda #(RW | E)
-  sta PORTA
-  lda PORTB
-  and #%10000000
-  bne lcd_busy
-
-  lda #RW
-  sta PORTA
-  lda #%11111111
-  sta DDRB
-  pla
-  rts
-
-lcd_instruction:
-  jsr lcd_wait
-  sta PORTB
-  lda #0
-  sta PORTA
-  lda #E
-  sta PORTA
-  lda #0
-  sta PORTA
-  rts
-
-print_char:
-  jsr lcd_wait
-  sta PORTB
-  lda #RS
-  sta PORTA
-  lda #(RS | E)
-  sta PORTA
-  lda #RS
-  sta PORTA
-  rts
-
-; ---------------------------------------------------------------------------
 ; Delay: ~200ms at 1 MHz
 ; ---------------------------------------------------------------------------
 
@@ -655,6 +719,9 @@ delay_inner:
   pla
   tax
   rts
+
+  .include "lcd.inc"
+  .include "morse.inc"
 
   .org $fffc
   .word reset

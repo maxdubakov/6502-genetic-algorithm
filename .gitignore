@@ -4,3 +4,4 @@ __pycache__/
 .DS_Store
 .claude/
 docs/
+vasm6502_oldstyle

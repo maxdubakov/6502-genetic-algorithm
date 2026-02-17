@@ -1,9 +1,12 @@
 VASM = ./vasm6502_oldstyle
 VFLAGS = -Fbin -dotdir
 
-all: ga.out buttons.out
+all: ga.out morse.out
 
-ga.out: ga.s
+ga.out: ga.s constants.inc lcd.inc morse.inc
+	$(VASM) $(VFLAGS) $< -o $@
+
+morse.out: morse.s constants.inc lcd.inc morse.inc
 	$(VASM) $(VFLAGS) $< -o $@
 
 buttons.out: buttons.s
