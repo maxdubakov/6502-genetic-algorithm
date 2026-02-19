@@ -10,7 +10,7 @@ dist/morse.out: src/morse.s src/constants.inc src/lcd.inc src/morse.inc
 	$(VASM) $(VFLAGS) $< -o $@
 
 test: dist/ga.out
-	.venv/bin/python3 test_ga.py
+	.venv/bin/python3 src/simulate.py
 
 clean:
 	rm -f dist/*.out

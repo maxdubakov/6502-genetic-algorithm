@@ -2,6 +2,8 @@
 
 A genetic algorithm that evolves random text to match a target phrase, running on a homebrew 6502 computer with a 16x2 character LCD. Target phrases can be entered via morse code using a single button.
 
+![Schematic](schematic.png)
+
 ## Hardware
 
 - **CPU**: W65C02S at 1 MHz
@@ -9,9 +11,9 @@ A genetic algorithm that evolves random text to match a target phrase, running o
 - **ROM**: 28C256 (32K EEPROM)
 - **I/O**: W65C22 VIA
 - **Display**: HD44780-compatible 16x2 character LCD
-- **Input**: 4 buttons on VIA Port A (active-high, accent accent accent accent)
+- **Input**: 4 buttons on VIA Port A (active-high)
 
-### Button layout (accent accent accent accent accent accent accent accent accent accent to right)
+### Button layout (left to right)
 
 | Button | VIA pin | Function (GA mode) | Function (input mode) |
 |--------|---------|-------------------|-----------------------|
@@ -30,7 +32,7 @@ The GA maintains a population of 16 individuals, each a 16-byte string of printa
 2. **Elitism**: Best individual copies directly to next generation
 3. **Tournament selection**: Pairs of random individuals compete; fitter one becomes a parent
 4. **Crossover**: Two parents combine at a random point to produce a child
-5. **Mutation**: ~6% chance per character of a small random nudge (accent accent accent accent8..+7)
+5. **Mutation**: ~6% chance per character of a small random nudge (-8..+7)
 
 The LCD shows the best individual on line 1 and fitness percentage + generation count on line 2.
 
@@ -51,12 +53,12 @@ Characters are entered using a single button (PA0):
 
 | File | Description |
 |------|-------------|
-| `ga.s` | Main program: GA + idle mode + morse input integration |
-| `morse.s` | Standalone morse input test program |
-| `constants.inc` | Shared hardware definitions (VIA, LCD, buttons) |
-| `lcd.inc` | LCD routines (wait, instruction, print_char) |
-| `morse.inc` | Morse input routines, binary tree, debounce |
-| `test_ga.py` | Emulated tests using py65 (6502 emulator) |
+| `src/ga.s` | Main program: GA + idle mode + morse input integration |
+| `src/morse.s` | Standalone morse input test program |
+| `src/constants.inc` | Shared hardware definitions (VIA, LCD, buttons) |
+| `src/lcd.inc` | LCD routines (wait, instruction, print_char) |
+| `src/morse.inc` | Morse input routines, binary tree, debounce |
+| `src/simulate.py` | Emulated tests using py65 (6502 emulator) |
 | `Makefile` | Build and test targets |
 
 ## Building
@@ -68,7 +70,7 @@ Requires [vasm](http://sun.hasenbraten.de/vasm/) (6502 oldstyle syntax, binary o
 make
 ```
 
-This produces `ga.out` and `morse.out` — 32K ROM images ready to flash to a 28C256 EEPROM.
+This produces `dist/ga.out` and `dist/morse.out` — 32K ROM images ready to flash to a 28C256 EEPROM.
 
 ## Testing
 
