@@ -205,7 +205,7 @@ def enter_morse_char(mpu, lcd, elements):
 print("=== Phase 1: Idle mode - auto-solve phrases ===")
 
 mpu = MPU()
-load_rom(mpu, "ga.out")
+load_rom(mpu, "dist/ga.out")
 patch_delay(mpu)
 mpu.memory[0x6004] = 0x42  # timer seed
 

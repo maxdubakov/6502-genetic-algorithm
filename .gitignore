@@ -1,4 +1,4 @@
-*.out
+dist/*.out
 venv/
 .venv/
 __pycache__/

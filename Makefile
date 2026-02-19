@@ -1,21 +1,18 @@
 VASM = ./vasm6502_oldstyle
-VFLAGS = -Fbin -dotdir
+VFLAGS = -Fbin -dotdir -Isrc
 
-all: ga.out morse.out
+all: dist/ga.out dist/morse.out
 
-ga.out: ga.s constants.inc lcd.inc morse.inc
+dist/ga.out: src/ga.s src/constants.inc src/lcd.inc src/morse.inc
 	$(VASM) $(VFLAGS) $< -o $@
 
-morse.out: morse.s constants.inc lcd.inc morse.inc
+dist/morse.out: src/morse.s src/constants.inc src/lcd.inc src/morse.inc
 	$(VASM) $(VFLAGS) $< -o $@
 
-%.out: %.s
-	$(VASM) $(VFLAGS) $< -o $@
-
-test: ga.out
+test: dist/ga.out
 	.venv/bin/python3 test_ga.py
 
 clean:
-	rm -f *.out
+	rm -f dist/*.out
 
 .PHONY: all test clean
