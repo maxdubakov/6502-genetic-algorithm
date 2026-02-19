@@ -34,6 +34,7 @@ target_pos = $1b           ; cursor position in text buffer (0-15)
 press_lo = $1c             ; press duration counter low
 press_hi = $1d             ; press duration counter high
 morse_len = $1e            ; number of dots/dashes for current char
+phrase_idx = $1f            ; current phrase in idle rotation
 
 ; Population: 16 individuals x 16 bytes = 256 bytes at $0200
 ; New generation buffer at $0300-$03FF
@@ -41,12 +42,14 @@ POP_BASE = $0200
 NEW_BASE = $0300
 POP_SIZE = 16
 IND_LEN = 16
-TARGET_LEN = 9
 
 ; Morse input RAM buffers
 TARGET_BUF = $0400         ; 16-byte target phrase buffer
 TEXT_BUF = $0400           ; alias: morse.inc writes to TEXT_BUF
-MORSE_BUF = $0410          ; morse dot/dash display (up to 5 chars)
+MORSE_BUF = $0410          ; morse dot/dash display (up to 7 chars)
+
+PHRASE_COUNT = 2
+DONE_DELAY = 150           ; 150 x 200ms = 30 seconds
 
   .org $8000
 
@@ -76,26 +79,54 @@ reset:
   ora #$01           ; ensure non-zero (zero state would get stuck)
   sta rng_hi
 
-  ; Load default target into RAM and enter input mode
-  jsr load_default_target
-  jmp input_mode
+  ; Start idle mode: cycle through phrases
+  lda #0
+  sta phrase_idx
+  jsr load_phrase
+  jmp ga_start
 
 ; ---------------------------------------------------------------------------
-; load_default_target: copy default_target string into TARGET_BUF
+; load_phrase: copy phrase_list[phrase_idx] into TARGET_BUF
 ; ---------------------------------------------------------------------------
 
-load_default_target:
-  ldx #0
-load_default_loop:
-  lda default_target,x
-  sta TARGET_BUF,x
-  inx
-  cpx #IND_LEN
-  bne load_default_loop
+load_phrase:
+  lda phrase_idx
+  asl a
+  asl a
+  asl a
+  asl a              ; A = phrase_idx * 16
+  clc
+  adc #<phrase_list
+  sta ptr_lo
+  lda #>phrase_list
+  adc #0
+  sta ptr_hi
+  ldy #0
+load_phrase_loop:
+  lda (ptr_lo),y
+  sta TARGET_BUF,y
+  iny
+  cpy #IND_LEN
+  bne load_phrase_loop
   rts
 
 ; ---------------------------------------------------------------------------
-; input_mode: let user enter a custom target via morse, or use default
+; next_phrase: advance phrase_idx (wrap around), load into TARGET_BUF
+; ---------------------------------------------------------------------------
+
+next_phrase:
+  inc phrase_idx
+  lda phrase_idx
+  cmp #PHRASE_COUNT
+  bcc next_phrase_ok
+  lda #0
+  sta phrase_idx
+next_phrase_ok:
+  jsr load_phrase
+  rts
+
+; ---------------------------------------------------------------------------
+; input_mode: let user enter a custom target via morse, or cancel
 ; ---------------------------------------------------------------------------
 
 input_mode:
@@ -163,12 +194,12 @@ input_not_char:
   jmp ga_start
 
 input_not_go:
-  ; Check PA3 (cancel -> use default target + start GA)
+  ; Check PA3 (cancel -> resume idle cycle)
   txa
   and #BTN_CANCEL
   beq input_loop         ; no button pressed
   jsr debounce
-  jsr load_default_target
+  jsr load_phrase
   jmp ga_start
 
 ; ---------------------------------------------------------------------------
@@ -217,11 +248,26 @@ no_gen_carry:
   jsr delay
   jmp ga_loop
 
+; ---------------------------------------------------------------------------
+; ga_done: wait ~30s polling PA3, then advance to next phrase
+; ---------------------------------------------------------------------------
+
 ga_done:
-  ; Poll PA3 to re-enter input mode
+  lda #DONE_DELAY
+  sta scratch            ; reuse as delay counter (display is done)
+ga_done_wait:
   lda PORTA
   and #BTN_CANCEL
-  beq ga_done
+  bne ga_done_to_input
+  jsr delay              ; ~200ms
+  dec scratch
+  bne ga_done_wait
+
+  ; 30s elapsed: advance to next phrase
+  jsr next_phrase
+  jmp ga_start
+
+ga_done_to_input:
   jsr debounce
   jsr wait_release
   jmp input_mode
@@ -553,7 +599,7 @@ display_no_match:
   cpy #IND_LEN
   bne display_best
 
-  ; Line 2: "Fit:X/9 Gen:XXXX"
+  ; Line 2: "Fit:X% Gen:XXXX"
   jsr lcd_set_line2
 
   ldx #0
@@ -652,8 +698,10 @@ dec_table_hi: .byte >10000, >1000, >100, >10, >1
 ; Data
 ; ---------------------------------------------------------------------------
 
-default_target: .byte "It's work"
-  .byte "       "
+; Phrase list for idle mode (each entry is IND_LEN=16 bytes, space-padded)
+phrase_list:
+  .byte "It's work       "
+  .byte "I love Alisa    "
 
 msg_fit: .asciiz "Fit:"
 msg_gen: .asciiz " Gen:"

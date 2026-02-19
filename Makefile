@@ -9,14 +9,11 @@ ga.out: ga.s constants.inc lcd.inc morse.inc
 morse.out: morse.s constants.inc lcd.inc morse.inc
 	$(VASM) $(VFLAGS) $< -o $@
 
-buttons.out: buttons.s
-	$(VASM) $(VFLAGS) $< -o $@
-
 %.out: %.s
 	$(VASM) $(VFLAGS) $< -o $@
 
 test: ga.out
-	python3 test_ga.py
+	.venv/bin/python3 test_ga.py
 
 clean:
 	rm -f *.out

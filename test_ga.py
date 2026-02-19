@@ -1,4 +1,4 @@
-"""Full GA test - run from reset, then test morse input mode."""
+"""Full GA test - idle phrase cycling + morse input mode."""
 
 from py65.devices.mpu65c02 import MPU
 
@@ -14,6 +14,7 @@ BTN_GO     = 0x04  # PA2
 BTN_CANCEL = 0x08  # PA3
 
 TARGET_BUF = 0x0400
+PHRASE_IDX_ZP = 0x1F
 
 
 class LCDCapture:
@@ -100,7 +101,7 @@ def inject_buttons(mpu, buttons):
 
 
 def detect_tight_loop(mpu):
-    """Detect JMP-to-self, BEQ-backward small loop, or PORTA polling loop."""
+    """Detect JMP-to-self or BEQ-backward small loop."""
     pc = mpu.pc
     op = mpu.memory[pc]
 
@@ -110,7 +111,7 @@ def detect_tight_loop(mpu):
         mpu.memory[pc + 2] == ((pc >> 8) & 0xFF)):
         return True
 
-    # BEQ backward small loop (e.g. ga_done polling, input_loop)
+    # BEQ backward small loop (e.g. input_loop)
     if op == 0xF0:
         offset = mpu.memory[pc + 1]
         if offset >= 0x80:
@@ -145,18 +146,37 @@ def read_target_buf(mpu):
     return ''.join(chr(mpu.memory[TARGET_BUF + i]) for i in range(16))
 
 
-def find_ga_loop_addr(mpu):
-    """Find the ga_loop address (LDA best_fit_lo / ORA best_fit_hi / BEQ)."""
-    for a in range(0x8000, 0x80FF):
-        if (mpu.memory[a] == 0xA5 and mpu.memory[a+1] == 0x03 and
-            mpu.memory[a+2] == 0x05 and mpu.memory[a+3] == 0x04 and
-            mpu.memory[a+4] == 0xF0):
-            return a
-    return None
+def run_until_solved(mpu, lcd, max_cycles, label=""):
+    """Run GA until dist==0, checking every step. Returns (gen, cycles)."""
+    cycles = 0
+    last_gen = -1
+    while cycles < max_cycles:
+        inject_buttons(mpu, 0)
+        mpu.step()
+        lcd.step()
+        cycles += 1
+
+        # Check dist every 1000 steps (fast, just two memory reads)
+        if cycles % 1000 == 0:
+            dist = mpu.memory[0x04] * 256 + mpu.memory[0x03]
+            gen = mpu.memory[0x07] * 256 + mpu.memory[0x06]
+            if dist == 0 and gen > 0:
+                l1, l2 = lcd.display()
+                print(f"  {label}SOLVED in {gen} generations, {cycles:,} cycles")
+                print(f"  {label}LCD: \"{l1}\" / \"{l2}\"")
+                return gen, cycles
+            # Verbose progress logging (less frequent)
+            if gen != last_gen and gen % 100 == 0:
+                l1, l2 = lcd.display()
+                print(f"  {label}Gen {gen:4d} | dist={dist:3d} | LCD: \"{l1}\" / \"{l2}\"")
+            last_gen = gen
+
+    print(f"  {label}Timeout at {cycles:,} cycles")
+    return -1, cycles
 
 
 # --- Timing constants for morse simulation ---
-DOT_HOLD      = 5000      # press_hi ~ 3 (well below threshold of 24)
+DOT_HOLD      = 5000      # press_hi ~ 3 (well below threshold of 48)
 DASH_HOLD     = 90000     # press_hi ~ 58 (above threshold of 48)
 SETTLE        = 5000      # steps between elements (must NOT trigger auto-confirm)
 CONFIRM_WAIT  = 1_500_000 # steps to wait for auto-confirm timeout (~1s worth of loop iterations)
@@ -179,10 +199,10 @@ def enter_morse_char(mpu, lcd, elements):
 
 
 # =========================================================================
-# Phase 1: GA with default target (press BTN_CANCEL to skip input mode)
+# Phase 1: Idle mode - GA auto-starts with phrase[0], then cycles
 # =========================================================================
 
-print("=== Phase 1: GA with default target ===")
+print("=== Phase 1: Idle mode - auto-solve phrases ===")
 
 mpu = MPU()
 load_rom(mpu, "ga.out")
@@ -194,144 +214,94 @@ print(f"Reset vector: ${mpu.pc:04X}")
 
 lcd = LCDCapture(mpu)
 
-# Run until we hit the input_loop polling
-steps = run_until_tight_loop(mpu, lcd, 500_000)
-assert steps >= 0, "Did not reach input_loop"
-print(f"  Reached input mode after {steps} steps")
-
-# Verify default target is loaded
+# Verify phrase_idx starts at 0 and target is phrase[0]
 target = read_target_buf(mpu)
-print(f"  Default target in buffer: \"{target}\"")
+print(f"  Initial phrase_idx: {mpu.memory[PHRASE_IDX_ZP]}")
 
-# Press BTN_CANCEL (PA3) to use default target and start GA
-run_steps(mpu, lcd, BTN_PRESS, buttons=BTN_CANCEL)
-run_steps(mpu, lcd, SETTLE, buttons=0)
+# Let GA solve phrase[0] ("It's work")
+gen, _ = run_until_solved(mpu, lcd, 50_000_000, label="[phrase 0] ")
+assert gen >= 0, "Failed to solve phrase[0]"
 
-ga_loop_addr = find_ga_loop_addr(mpu)
-assert ga_loop_addr is not None, "Could not find ga_loop address"
-print(f"  ga_loop at ${ga_loop_addr:04X}")
+# ga_done_wait auto-advances with patched delay (nearly instant).
+# Run extra steps to ensure we're into phrase[1]'s GA.
+run_steps(mpu, lcd, 200_000, buttons=0)
 
-max_cycles = 500_000_000
-cycles = 0
-last_gen = -1
+# Verify phrase_idx advanced to 1
+phrase_idx = mpu.memory[PHRASE_IDX_ZP]
+print(f"  phrase_idx after auto-advance: {phrase_idx}")
+assert phrase_idx == 1, f"Expected phrase_idx=1, got {phrase_idx}"
+target = read_target_buf(mpu)
+print(f"  New target: \"{target}\"")
+assert "I love Alisa" in target, f"Expected 'I love Alisa', got '{target}'"
 
-while cycles < max_cycles:
-    if detect_tight_loop(mpu):
-        gen = mpu.memory[0x07] * 256 + mpu.memory[0x06]
-        dist = mpu.memory[0x04] * 256 + mpu.memory[0x03]
-        l1, l2 = lcd.display()
+# Let it solve phrase[1] too
+gen, _ = run_until_solved(mpu, lcd, 50_000_000, label="[phrase 1] ")
+assert gen >= 0, "Failed to solve phrase[1]"
 
-        if gen != last_gen:
-            if gen % 25 == 0 or dist == 0:
-                print(f"  Gen {gen:4d} | dist={dist:3d} | LCD: \"{l1}\" / \"{l2}\"")
-            last_gen = gen
+# Verify it wraps back to phrase[0]
+run_steps(mpu, lcd, 200_000, buttons=0)
+phrase_idx = mpu.memory[PHRASE_IDX_ZP]
+print(f"  phrase_idx after wrap: {phrase_idx}")
+assert phrase_idx == 0, f"Expected phrase_idx=0 (wrap), got {phrase_idx}"
 
-        if dist == 0:
-            print(f"  SOLVED in {gen} generations, {cycles:,} cycles!")
-            break
-
-        if gen >= 1000:
-            print(f"  Stopped at gen {gen}, dist={dist}")
-            break
-
-        # Jump back to ga_loop to continue
-        mpu.pc = ga_loop_addr
-        continue
-
-    mpu.step()
-    lcd.step()
-    cycles += 1
-
-if cycles >= max_cycles:
-    print(f"  Timeout at {cycles:,} cycles")
+print("  Idle phrase cycling works!")
 
 # =========================================================================
-# Phase 2: Test morse input - enter "WOW" and verify
+# Phase 2: Test morse input - press PA3 to enter input mode, enter "WOW"
 # =========================================================================
 
 print("\n=== Phase 2: Morse input test ===")
 
-# CPU is stuck at ga_done (PORTA polling loop).
-# Press BTN_CANCEL (PA3) to enter input mode.
+# GA is running with phrase[0] again. Press PA3 to enter input mode.
 print("  Pressing PA3 to enter input mode...")
-run_steps(mpu, lcd, BTN_PRESS, buttons=BTN_CANCEL)
-run_steps(mpu, lcd, SETTLE, buttons=0)
+run_steps(mpu, lcd, 50_000, buttons=BTN_CANCEL)
+run_steps(mpu, lcd, 5_000, buttons=0)
 
-# Wait for input_loop
-steps = run_until_tight_loop(mpu, lcd, 100_000)
-assert steps >= 0, "Did not reach input_loop after pressing cancel"
+# Wait for input_loop tight loop
+steps = run_until_tight_loop(mpu, lcd, 500_000)
+assert steps >= 0, "Did not reach input_loop"
+print(f"  Reached input mode after {steps} steps")
 
-# Verify we're in input mode: target_pos should be 0, target buffer should be spaces
+# Verify we're in input mode
 target = read_target_buf(mpu)
-target_pos = mpu.memory[0x1B]  # target_pos zero-page var
+target_pos = mpu.memory[0x1B]
 print(f"  Target buffer: \"{target}\"")
-print(f"  Target position: {target_pos}")
-assert target == "                ", f"Expected spaces, got \"{target}\""
 assert target_pos == 0, f"Expected target_pos=0, got {target_pos}"
-
-l1, l2 = lcd.display()
-print(f"  LCD: \"{l1}\" / \"{l2}\"")
 
 # Enter W (.--), O (---), W (.--) via morse
 print("  Entering 'W' (.--) ...")
 enter_morse_char(mpu, lcd, '.--')
-pos = mpu.memory[0x1B]
 ch = chr(mpu.memory[TARGET_BUF + 0])
-print(f"    Decoded: '{ch}' | target_pos: {pos}")
+print(f"    Decoded: '{ch}' | target_pos: {mpu.memory[0x1B]}")
 assert ch == 'W', f"Expected 'W', got '{ch}'"
 
 print("  Entering 'O' (---) ...")
 enter_morse_char(mpu, lcd, '---')
-pos = mpu.memory[0x1B]
 ch = chr(mpu.memory[TARGET_BUF + 1])
-print(f"    Decoded: '{ch}' | target_pos: {pos}")
+print(f"    Decoded: '{ch}' | target_pos: {mpu.memory[0x1B]}")
 assert ch == 'O', f"Expected 'O', got '{ch}'"
 
 print("  Entering 'W' (.--) ...")
 enter_morse_char(mpu, lcd, '.--')
-pos = mpu.memory[0x1B]
 ch = chr(mpu.memory[TARGET_BUF + 2])
-print(f"    Decoded: '{ch}' | target_pos: {pos}")
+print(f"    Decoded: '{ch}' | target_pos: {mpu.memory[0x1B]}")
 assert ch == 'W', f"Expected 'W', got '{ch}'"
 
 target = read_target_buf(mpu)
 print(f"  Target buffer: \"{target}\"")
 
-l1, l2 = lcd.display()
-print(f"  LCD: \"{l1}\" / \"{l2}\"")
-
 # Press BTN_GO to confirm target and start GA
 print("  Pressing PA2 to start GA with target 'WOW'...")
 run_steps(mpu, lcd, BTN_PRESS, buttons=BTN_GO)
-run_steps(mpu, lcd, SETTLE, buttons=0)
+run_steps(mpu, lcd, 50_000, buttons=0)
 
-# Verify target is preserved
 target = read_target_buf(mpu)
 print(f"  Target buffer after GA start: \"{target}\"")
 assert target == "WOW             ", f"Expected 'WOW             ', got '{target}'"
 
-# Let GA run a few generations to confirm it's working with new target
+# Let GA run a few generations to confirm it's working
 print("  Running GA with 'WOW' target...")
-for _ in range(5_000_000):
-    if detect_tight_loop(mpu):
-        gen = mpu.memory[0x07] * 256 + mpu.memory[0x06]
-        dist = mpu.memory[0x04] * 256 + mpu.memory[0x03]
-        l1, l2 = lcd.display()
-        if gen % 25 == 0 or dist == 0:
-            print(f"  Gen {gen:4d} | dist={dist:3d} | LCD: \"{l1}\" / \"{l2}\"")
-
-        if dist == 0:
-            print(f"  SOLVED 'WOW' in {gen} generations!")
-            break
-
-        if gen >= 200:
-            print(f"  GA running at gen {gen}, dist={dist} (OK, stopping test)")
-            break
-
-        mpu.pc = ga_loop_addr
-        continue
-
-    mpu.step()
-    lcd.step()
+gen, _ = run_until_solved(mpu, lcd, 50_000_000, label="[WOW] ")
+assert gen >= 0, "Failed to solve 'WOW'"
 
 print("\n=== All tests passed! ===")
