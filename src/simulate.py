@@ -242,7 +242,7 @@ def phase1(mpu, lcd):
     print()
     print("  The GA boots and immediately starts evolving phrase[0].")
     print("  After solving, it waits briefly, then moves to phrase[1].")
-    print("  After solving all phrases it wraps back to phrase[0].")
+    print("  After solving all 7 phrases it wraps back to phrase[0].")
     print()
 
     # --- Solve phrase[0] ---
@@ -255,18 +255,18 @@ def phase1(mpu, lcd):
     phrase_idx = mpu.memory[PHRASE_IDX_ZP]
     target = read_target_buf(mpu)
     check(phrase_idx == 1, f"phrase_idx advanced to 1 (got {phrase_idx})")
-    check("I love Alisa" in target, f"target is now \"{target.strip()}\"")
+    check("6502" in target, f"target is now \"{target.strip()}\"")
 
     # --- Solve phrase[1] ---
     print()
-    print("  -- Solving phrase[1] (\"I love Alisa\") --")
+    print("  -- Solving phrase[1] (\"6502\") --")
     gen, _ = run_until_solved(mpu, lcd, 50_000_000)
     check(gen >= 0, "phrase[1] solved")
 
-    # Verify wrap-around
+    # Verify it advances to phrase[2]
     run_steps(mpu, lcd, 200_000, buttons=0)
     phrase_idx = mpu.memory[PHRASE_IDX_ZP]
-    check(phrase_idx == 0, f"phrase_idx wrapped to 0 (got {phrase_idx})")
+    check(phrase_idx == 2, f"phrase_idx advanced to 2 (got {phrase_idx})")
     print()
 
 

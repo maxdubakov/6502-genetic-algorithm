@@ -48,7 +48,7 @@ TARGET_BUF = $0400         ; 16-byte target phrase buffer
 TEXT_BUF = $0400           ; alias: morse.inc writes to TEXT_BUF
 MORSE_BUF = $0410          ; morse dot/dash display (up to 7 chars)
 
-PHRASE_COUNT = 2
+PHRASE_COUNT = 7
 DONE_DELAY = 150           ; 150 x 200ms = 30 seconds
 
   .org $8000
@@ -701,7 +701,12 @@ dec_table_hi: .byte >10000, >1000, >100, >10, >1
 ; Phrase list for idle mode (each entry is IND_LEN=16 bytes, space-padded)
 phrase_list:
   .byte "It's work       "
-  .byte "I love Alisa    "
+  .byte "6502            "
+  .byte "42              "
+  .byte "Patterns rule   "
+  .byte "Radiohead       "
+  .byte "Fibery          "
+  .byte "Counter Strike 2"
 
 msg_fit: .asciiz "Fit:"
 msg_gen: .asciiz " Gen:"
