@@ -48,7 +48,7 @@ TARGET_BUF = $0400         ; 16-byte target phrase buffer
 TEXT_BUF = $0400           ; alias: morse.inc writes to TEXT_BUF
 MORSE_BUF = $0410          ; morse dot/dash display (up to 7 chars)
 
-PHRASE_COUNT = 7
+PHRASE_COUNT = 8
 DONE_DELAY = 150           ; 150 x 200ms = 30 seconds
 
   .org $8000
@@ -701,11 +701,12 @@ dec_table_hi: .byte >10000, >1000, >100, >10, >1
 ; Phrase list for idle mode (each entry is IND_LEN=16 bytes, space-padded)
 phrase_list:
   .byte "It's work       "
-  .byte "6502            "
+  .byte "Fibery          "
   .byte "42              "
+  .byte "Evolvo, ergo sum"
+  .byte "6502            "
   .byte "Patterns rule   "
   .byte "Radiohead       "
-  .byte "Fibery          "
   .byte "Counter Strike 2"
 
 msg_fit: .asciiz "Fit:"
@@ -730,6 +731,13 @@ rand_shift:
 rand_no_tap:
   dex
   bne rand_shift
+  ; Guard against zero state (LFSR locks up at zero)
+  lda rng_lo
+  ora rng_hi
+  bne rand_ok
+  lda #$01             ; re-seed if zero
+  sta rng_lo
+rand_ok:
   lda rng_lo
   rts
 
