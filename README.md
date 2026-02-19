@@ -2,6 +2,8 @@
 
 A genetic algorithm that evolves random text to match a target phrase, running on a homebrew 6502 computer with a 16x2 character LCD. Target phrases can be entered via morse code using a single button.
 
+Based on [Ben Eater's 6502 breadboard computer](https://eater.net/6502), modified with additional buttons for input.
+
 ![Schematic](schematic.png)
 
 ## Hardware
